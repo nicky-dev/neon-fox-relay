@@ -1,0 +1,19 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# Environment secrets
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# sqlx offline query cache (optional, include if you want offline mode)
+# .sqlx/
