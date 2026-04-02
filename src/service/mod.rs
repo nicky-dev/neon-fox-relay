@@ -28,6 +28,27 @@ pub struct EventResult {
 ///
 /// Returns an [`EventResult`] that is used to build the `["OK", …]` reply.
 pub async fn handle_event(state: &AppState, event: NostrEvent) -> EventResult {
+    // ── Relay limits ──────────────────────────────────────────────────────────
+    if event.content.len() > state.config.max_content_length {
+        return EventResult {
+            accepted: false,
+            message: format!(
+                "invalid: content exceeds maximum length of {} bytes",
+                state.config.max_content_length
+            ),
+        };
+    }
+
+    if event.tags.len() > state.config.max_event_tags {
+        return EventResult {
+            accepted: false,
+            message: format!(
+                "invalid: too many tags (max {})",
+                state.config.max_event_tags
+            ),
+        };
+    }
+
     // ── Step 2 + 3 + 4: validate (structure, ID hash, signature) ──────────────
     if let Err(e) = event.validate() {
         return EventResult {
