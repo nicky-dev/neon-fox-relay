@@ -182,6 +182,14 @@ async fn handle_client_req(
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
+    // Enforce filter count limit
+    if filters.len() > state.config.max_filters_per_subscription {
+        return Err(anyhow::anyhow!(
+            "too many filters (max {})",
+            state.config.max_filters_per_subscription
+        ));
+    }
+
     // Enforce subscription limit
     let subs = state
         .subscriptions
@@ -267,4 +275,117 @@ async fn handle_client_close(
 fn notice_msg(message: &str) -> String {
     serde_json::to_string(&serde_json::json!(["NOTICE", message]))
         .unwrap_or_else(|_| r#"["NOTICE","internal error"]"#.to_string())
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn notice_msg_format() {
+        let msg = notice_msg("test error");
+        let parsed: Value = serde_json::from_str(&msg).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr[0], "NOTICE");
+        assert_eq!(arr[1], "test error");
+    }
+
+    #[test]
+    fn notice_msg_empty_string() {
+        let msg = notice_msg("");
+        let parsed: Value = serde_json::from_str(&msg).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr[0], "NOTICE");
+        assert_eq!(arr[1], "");
+    }
+
+    // ── dispatch_message parsing helpers ──────────────────────────────────────
+    // These tests validate the JSON parsing logic without requiring a live
+    // AppState / database connection.
+
+    fn parse_msg_type(text: &str) -> anyhow::Result<String> {
+        let value: Value = serde_json::from_str(text)
+            .map_err(|e| anyhow::anyhow!("JSON parse: {e}"))?;
+        let arr = value
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("message is not a JSON array"))?;
+        let msg_type = arr
+            .first()
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing message type"))?;
+        Ok(msg_type.to_string())
+    }
+
+    #[test]
+    fn parse_event_message_type() {
+        let text = r#"["EVENT", {}]"#;
+        assert_eq!(parse_msg_type(text).unwrap(), "EVENT");
+    }
+
+    #[test]
+    fn parse_req_message_type() {
+        let text = r#"["REQ", "sub1", {}]"#;
+        assert_eq!(parse_msg_type(text).unwrap(), "REQ");
+    }
+
+    #[test]
+    fn parse_close_message_type() {
+        let text = r#"["CLOSE", "sub1"]"#;
+        assert_eq!(parse_msg_type(text).unwrap(), "CLOSE");
+    }
+
+    #[test]
+    fn parse_invalid_json_fails() {
+        let result = parse_msg_type("not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_non_array_fails() {
+        let result = parse_msg_type(r#"{"type": "EVENT"}"#);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a JSON array"));
+    }
+
+    #[test]
+    fn parse_empty_array_fails() {
+        let result = parse_msg_type("[]");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing message type"));
+    }
+
+    // ── Filter parsing tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn parse_req_filters() {
+        let text = r#"["REQ", "sub1", {"kinds": [1]}, {"kinds": [0, 3]}]"#;
+        let value: Value = serde_json::from_str(text).unwrap();
+        let arr = value.as_array().unwrap();
+
+        let filters: Vec<Filter> = arr[2..]
+            .iter()
+            .map(|v| serde_json::from_value::<Filter>(v.clone()).unwrap())
+            .collect();
+
+        assert_eq!(filters.len(), 2);
+        assert_eq!(filters[0].kinds.as_ref().unwrap(), &[1u32]);
+        assert_eq!(filters[1].kinds.as_ref().unwrap(), &[0u32, 3u32]);
+    }
+
+    #[test]
+    fn parse_req_no_filters() {
+        let text = r#"["REQ", "sub1"]"#;
+        let value: Value = serde_json::from_str(text).unwrap();
+        let arr = value.as_array().unwrap();
+
+        let filters: Vec<Filter> = arr[2..]
+            .iter()
+            .map(|v| serde_json::from_value::<Filter>(v.clone()).unwrap())
+            .collect();
+
+        assert!(filters.is_empty());
+    }
 }
