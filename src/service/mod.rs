@@ -106,9 +106,12 @@ pub async fn handle_event(state: &AppState, event: NostrEvent) -> EventResult {
         tracing::warn!("broadcast_event error: {e}");
     }
 
-    // Also cache the event for fast reads
-    if let Err(e) = redis.cache_event(&event).await {
-        tracing::debug!("cache_event failed (non-fatal): {e}");
+    // Cache the event for fast reads – ephemeral events are never cached
+    // because they must not be stored by any relay (NIP-01).
+    if !is_ephemeral {
+        if let Err(e) = redis.cache_event(&event).await {
+            tracing::debug!("cache_event failed (non-fatal): {e}");
+        }
     }
 
     EventResult {
